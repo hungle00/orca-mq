@@ -1,15 +1,15 @@
 defmodule MiniBroker.StreamServer do
   @moduledoc """
-  Quản lý việc publish message, sinh Message ID chuẩn (timestamp_ms-seq)
-  và tương tác với MessageStore.
+  Publishes messages, generates stream IDs in the `timestamp_ms-sequence` format,
+  and interacts with MessageStore.
   """
 
   use GenServer
 
   alias MiniBroker.MessageStore
 
-  # State lưu trữ last_timestamp và sequence cho từng stream
-  # Format state: %{stream_name => {last_time_ms, seq}}
+  # State stores the last timestamp and sequence number for each stream.
+  # State format: %{stream_name => {last_time_ms, sequence}}
   @type state :: %{binary() => {integer(), integer()}}
 
   # ===================================================================
@@ -17,15 +17,15 @@ defmodule MiniBroker.StreamServer do
   # ===================================================================
 
   @doc """
-  Khởi chạy StreamServer GenServer.
+  Starts the StreamServer GenServer.
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
-  Publish một payload vào stream.
-  Trả về {:ok, message_id} hoặc {:error, reason}.
+  Publishes a payload to a stream.
+  Returns `{:ok, message_id}` or `{:error, reason}`.
   """
   @spec publish(String.t(), term()) :: {:ok, String.t()}
   def publish(stream, payload) do
@@ -33,7 +33,7 @@ defmodule MiniBroker.StreamServer do
   end
 
   @doc """
-  Đọc danh sách message từ một stream thông qua MessageStore.
+  Reads messages from a stream through MessageStore.
   """
   @spec read_stream(String.t(), keyword()) :: [MessageStore.t()]
   def read_stream(stream, opts \\ []) do
@@ -53,7 +53,7 @@ defmodule MiniBroker.StreamServer do
   def handle_call({:publish, stream, payload}, _from, state) do
     {msg_id, new_state} = generate_id(stream, state)
 
-    # Đưa vào MessageStore
+    # Store the message in MessageStore.
     :ok = MessageStore.put(stream, msg_id, payload)
 
     {:reply, {:ok, msg_id}, new_state}
@@ -63,7 +63,7 @@ defmodule MiniBroker.StreamServer do
   # Internal Helpers
   # ===================================================================
 
-  # Generates ID format: "<timestamp_ms>-<seq>"
+  # Generate IDs in the "<timestamp_ms>-<sequence>" format.
   defp generate_id(stream, state) do
     now_ms = System.system_time(:millisecond)
 
@@ -78,7 +78,7 @@ defmodule MiniBroker.StreamServer do
           {now_ms, seq + 1}
 
         true ->
-          # Xử lý trường hợp clock drift / system time lùi lại
+          # Handle clock drift or a system clock that moves backward.
           {last_ms, seq + 1}
       end
 

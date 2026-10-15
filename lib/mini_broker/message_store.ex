@@ -1,14 +1,14 @@
 defmodule MiniBroker.MessageStore do
   @moduledoc """
-  Quản lý ETS table lưu trữ message.
-  Cung cấp các hàm public API để thao tác với ETS table.
+  Manages the ETS table that stores messages.
+  Provides a public API for accessing and updating the table.
   """
 
   use GenServer
 
-  @table_name :mini_broker_messages
+  @table_name :orca_messages
 
-  # Struct đại diện cho một Message trong store
+  # Struct representing a message in the store.
   defstruct [:id, :stream, :payload, :timestamp]
 
   @type t :: %__MODULE__{
@@ -23,14 +23,14 @@ defmodule MiniBroker.MessageStore do
   # ===================================================================
 
   @doc """
-  Khởi chạy MessageStore GenServer.
+  Starts the MessageStore GenServer.
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
-  Lưu một message vào store.
+  Stores a message.
   """
   @spec put(String.t(), binary() | integer(), term()) :: :ok
   def put(stream, message_id, payload) do
@@ -41,14 +41,14 @@ defmodule MiniBroker.MessageStore do
       timestamp: System.system_time(:millisecond)
     }
 
-    # Lock tuple format: {{stream, message_id}, record}
-    # Việc dùng composite key {stream, message_id} giúp query và sắp xếp theo stream dễ dàng.
+    # ETS object format: {{stream, message_id}, record}.
+    # The composite key {stream, message_id} enables stream-scoped lookups and ordering.
     :ets.insert(@table_name, {{stream, message_id}, record})
     :ok
   end
 
   @doc """
-  Lấy một message cụ thể theo stream và message_id.
+  Retrieves a message by stream and message ID.
   """
   @spec get(String.t(), binary() | integer()) :: {:ok, t()} | {:error, :not_found}
   def get(stream, message_id) do
@@ -59,14 +59,14 @@ defmodule MiniBroker.MessageStore do
   end
 
   @doc """
-  Lấy danh sách message của một stream.
-  Hỗ trợ giới hạn số lượng (limit).
+  Retrieves messages from a stream.
+  Supports limiting the number of returned messages with `:limit`.
   """
   @spec list(String.t(), keyword()) :: [t()]
   def list(stream, opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
 
-    # Sử dụng Match Pattern để truy vấn tất cả message thuộc về stream này
+    # Use a match pattern to select messages belonging to this stream.
     match_spec = [
       {{{stream, :"$1"}, :"$2"}, [], [:"$2"]}
     ]
@@ -83,7 +83,7 @@ defmodule MiniBroker.MessageStore do
 
   @impl true
   def init(_opts) do
-    # Khai báo bảng ETS với tối ưu hóa concurrency
+    # Create the ETS table with concurrency optimizations.
     table =
       :ets.new(@table_name, [
         :ordered_set,
