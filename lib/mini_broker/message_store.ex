@@ -60,21 +60,25 @@ defmodule MiniBroker.MessageStore do
 
   @doc """
   Retrieves messages from a stream.
-  Supports limiting the number of returned messages with `:limit`.
+  Supports limiting the number of returned messages with `:limit` and retrieving
+  messages after a stream ID with `:after_id`.
   """
   @spec list(String.t(), keyword()) :: [t()]
   def list(stream, opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
+    after_id = Keyword.get(opts, :after_id)
 
-    # Use a match pattern to select messages belonging to this stream.
     match_spec = [
       {{{stream, :"$1"}, :"$2"}, [], [:"$2"]}
     ]
 
-    case :ets.select(@table_name, match_spec, limit) do
-      {records, _continuation} -> records
-      :"$end_of_table" -> []
-    end
+    @table_name
+    |> select_all(match_spec)
+    |> Enum.sort_by(&stream_id_key(&1.id))
+    |> Enum.filter(fn message ->
+      is_nil(after_id) or stream_id_key(message.id) > stream_id_key(after_id)
+    end)
+    |> Enum.take(limit)
   end
 
   # ===================================================================
@@ -94,5 +98,40 @@ defmodule MiniBroker.MessageStore do
       ])
 
     {:ok, %{table: table}}
+  end
+
+  defp select_all(table, match_spec) do
+    case :ets.select(table, match_spec, 1_000) do
+      {records, continuation} -> continue_select(continuation, records)
+      :"$end_of_table" -> []
+    end
+  end
+
+  defp continue_select(continuation, records) do
+    case :ets.select(continuation) do
+      {next_records, next_continuation} ->
+        next_records = Enum.reduce(next_records, records, fn record, acc -> [record | acc] end)
+        continue_select(next_continuation, next_records)
+
+      :"$end_of_table" ->
+        records
+    end
+  end
+
+  defp stream_id_key(id) when is_integer(id), do: {0, id, 0}
+
+  defp stream_id_key(id) when is_binary(id) do
+    case String.split(id, "-", parts: 2) do
+      [timestamp, sequence] ->
+        with {timestamp, ""} <- Integer.parse(timestamp),
+             {sequence, ""} <- Integer.parse(sequence) do
+          {0, timestamp, sequence}
+        else
+          _ -> {1, id}
+        end
+
+      _ ->
+        {1, id}
+    end
   end
 end

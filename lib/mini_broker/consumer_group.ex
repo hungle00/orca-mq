@@ -26,6 +26,7 @@ defmodule MiniBroker.ConsumerGroup do
   # Public API
   # ===================================================================
 
+  @spec start_link(keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   @doc """
   Starts the ConsumerGroup GenServer.
   """
@@ -85,14 +86,8 @@ defmodule MiniBroker.ConsumerGroup do
 
   @impl true
   def handle_call({:fetch_messages, consumer_pid, count}, _from, state) do
-    # Read messages from MessageStore whose IDs are greater than last_delivered_id.
-    all_messages = MessageStore.list(state.stream, limit: 1000)
-
     undelivered =
-      Enum.filter(all_messages, fn msg ->
-        compare_ids(msg.id, state.last_delivered_id) == :gt
-      end)
-      |> Enum.take(count)
+      MessageStore.list(state.stream, after_id: state.last_delivered_id, limit: count)
 
     now = System.system_time(:millisecond)
 
@@ -128,23 +123,5 @@ defmodule MiniBroker.ConsumerGroup do
     }
 
     {:reply, info_map, state}
-  end
-
-  # ===================================================================
-  # Helpers
-  # ===================================================================
-
-  # Compare two stream IDs in "timestamp-sequence" format.
-  defp compare_ids(id1, id2) do
-    [ts1, seq1] = String.split(id1, "-") |> Enum.map(&String.to_integer/1)
-    [ts2, seq2] = String.split(id2, "-") |> Enum.map(&String.to_integer/1)
-
-    cond do
-      ts1 > ts2 -> :gt
-      ts1 < ts2 -> :lt
-      seq1 > seq2 -> :gt
-      seq1 < seq2 -> :lt
-      true -> :eq
-    end
   end
 end
