@@ -1,4 +1,4 @@
-defmodule MiniBroker.Application do
+defmodule OrcaMQ.Application do
   # See https://hexdocs.pm/elixir/Application.html
   # for more information on OTP Applications
   @moduledoc false
@@ -9,16 +9,16 @@ defmodule MiniBroker.Application do
   def start(_type, _args) do
     children = [
       # The Registry tracks ConsumerGroup processes by {stream, group_name}.
-      {Registry, keys: :unique, name: MiniBroker.GroupRegistry},
+      {Registry, keys: :unique, name: OrcaMQ.GroupRegistry},
       # The DynamicSupervisor starts ConsumerGroup processes when subscribe/3 is called.
-      {DynamicSupervisor, strategy: :one_for_one, name: MiniBroker.GroupSupervisor},
-      MiniBroker.MessageStore,
+      {DynamicSupervisor, strategy: :one_for_one, name: OrcaMQ.GroupSupervisor},
+      OrcaMQ.MessageStore,
       # StreamServer depends on MessageStore.
-      MiniBroker.StreamServer
+      OrcaMQ.StreamServer
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html for other strategies and supported options.
-    opts = [strategy: :one_for_one, name: MiniBroker.Supervisor]
+    opts = [strategy: :one_for_one, name: OrcaMQ.Supervisor]
     Supervisor.start_link(children, opts)
   end
 end

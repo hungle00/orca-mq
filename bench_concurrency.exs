@@ -1,5 +1,5 @@
 # 1. Boot OTP Application
-{:ok, _} = Application.ensure_all_started(:mini_broker)
+{:ok, _} = Application.ensure_all_started(:orca_mq)
 
 stream_name = "orders_high_load"
 
@@ -9,7 +9,7 @@ messages_per_publisher = 1000   # Each process push 1,000 msgs => 20,000 msgs
 total_messages = total_publishers * messages_per_publisher
 
 IO.puts("==================================================")
-IO.puts("   MINIBROKER HIGH CONCURRENCY BENCHMARK          ")
+IO.puts("   OrcaMQ HIGH CONCURRENCY BENCHMARK          ")
 IO.puts("==================================================")
 IO.puts("Total Messages to Publish: #{total_messages}")
 IO.puts("Concurrent Publisher Processes: #{total_publishers}")
@@ -25,7 +25,7 @@ counter_group = :counters.new(1, [:write_concurrency])
 test_pid = self()
 
 {:ok, _} =
-  MiniBroker.subscribe(
+  OrcaMQ.subscribe(
     stream_name,
     "fast_notification_group",
     fn _msg ->
@@ -54,7 +54,7 @@ publish_start_time = System.monotonic_time(:millisecond)
   fn pub_id ->
     for i <- 1..messages_per_publisher do
       payload = %{pub_id: pub_id, seq: i, data: "payload_#{pub_id}_#{i}"}
-      MiniBroker.publish(stream_name, payload)
+      OrcaMQ.publish(stream_name, payload)
     end
   end,
   max_concurrency: total_publishers,
@@ -97,5 +97,5 @@ IO.puts("Consumption Speed        : #{consume_tps} msgs/sec")
 IO.puts("--------------------------------------------------")
 
 # VERIFY DATA IN ETS
-messages_in_ets = length(MiniBroker.MessageStore.list(stream_name, limit: 100_000))
+messages_in_ets = length(OrcaMQ.MessageStore.list(stream_name, limit: 100_000))
 IO.puts("Total Messages in ETS    : #{messages_in_ets}")

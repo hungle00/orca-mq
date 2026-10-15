@@ -1,8 +1,8 @@
-defmodule MiniBroker.StreamServerTest do
+defmodule OrcaMQ.StreamServerTest do
   use ExUnit.Case, async: false
 
-  alias MiniBroker.MessageStore
-  alias MiniBroker.StreamServer
+  alias OrcaMQ.MessageStore
+  alias OrcaMQ.StreamServer
 
   test "publish/2 generate message ID and save to MessageStore" do
     stream = "orders"

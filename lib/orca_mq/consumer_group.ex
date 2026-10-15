@@ -1,11 +1,11 @@
-defmodule MiniBroker.ConsumerGroup do
+defmodule OrcaMQ.ConsumerGroup do
   @moduledoc """
   Manages a consumer group and stores its delivery offset and pending messages.
   """
 
   use GenServer
 
-  alias MiniBroker.MessageStore
+  alias OrcaMQ.MessageStore
 
   defstruct [
     :stream,
@@ -59,7 +59,7 @@ defmodule MiniBroker.ConsumerGroup do
   end
 
   def via_tuple(stream, group_name) do
-    {:via, Registry, {MiniBroker.GroupRegistry, {stream, group_name}}}
+    {:via, Registry, {OrcaMQ.GroupRegistry, {stream, group_name}}}
   end
 
   # ===================================================================

@@ -1,4 +1,4 @@
-defmodule MiniBroker.Consumer do
+defmodule OrcaMQ.Consumer do
   @moduledoc """
   GenServer worker that continuously fetches messages from a ConsumerGroup,
   invokes the handler function, and acknowledges messages on success.
@@ -6,7 +6,7 @@ defmodule MiniBroker.Consumer do
   use GenServer
   require Logger
 
-  alias MiniBroker.ConsumerGroup
+  alias OrcaMQ.ConsumerGroup
 
   # Poll interval in milliseconds.
   @default_poll_interval 100

@@ -1,12 +1,12 @@
-defmodule MiniBroker do
+defmodule OrcaMQ do
   @moduledoc """
-  Public API for MiniBroker.
-  Provides functions to publish messages, subscribe consumers, and acknowledge messages.
+  Public API for OrcaMQ.
+  Provides functions to publish messages, fetch them for consumers, and acknowledge them.
   """
 
-  alias MiniBroker.Consumer
-  alias MiniBroker.ConsumerGroup
-  alias MiniBroker.StreamServer
+  alias OrcaMQ.Consumer
+  alias OrcaMQ.ConsumerGroup
+  alias OrcaMQ.StreamServer
 
   @doc """
   Publishes a message to a stream.
@@ -17,6 +17,19 @@ defmodule MiniBroker do
   end
 
   @doc """
+  Fetches a batch of messages for a consumer.
+  Starts the consumer group if it does not exist.
+  """
+  @spec fetch(String.t(), String.t(), pid(), pos_integer(), keyword()) ::
+          [OrcaMQ.MessageStore.t()] | {:error, term()}
+  def fetch(stream, group_name, consumer_pid, count \\ 10, opts \\ [])
+      when is_binary(stream) and is_binary(group_name) and is_pid(consumer_pid) and count > 0 do
+    with {:ok, _group_pid} <- ensure_consumer_group_started(stream, group_name, opts) do
+      ConsumerGroup.fetch_messages(stream, group_name, consumer_pid, count)
+    end
+  end
+
+  @doc """
   Subscribes a consumer to a stream with the given group name and handler function.
   Starts the consumer group if it does not exist, then starts a consumer worker.
   """
@@ -24,19 +37,17 @@ defmodule MiniBroker do
           {:ok, pid()} | {:error, term()}
   def subscribe(stream, group_name, handler_fn, opts \\ [])
       when is_binary(stream) and is_binary(group_name) and is_function(handler_fn, 1) do
-    # 1. Ensure the ConsumerGroup GenServer has been started.
-    ensure_consumer_group_started(stream, group_name, opts)
+    with {:ok, _group_pid} <- ensure_consumer_group_started(stream, group_name, opts) do
+      consumer_opts =
+        [
+          stream: stream,
+          group_name: group_name,
+          handler_fn: handler_fn
+        ]
+        |> Keyword.merge(opts)
 
-    # 2. Start the consumer process.
-    consumer_opts =
-      [
-        stream: stream,
-        group_name: group_name,
-        handler_fn: handler_fn
-      ]
-      |> Keyword.merge(opts)
-
-    Consumer.start_link(consumer_opts)
+      Consumer.start_link(consumer_opts)
+    end
   end
 
   @doc """
@@ -54,7 +65,7 @@ defmodule MiniBroker do
       nil ->
         # If it is not running, start it under the dynamic supervisor.
         group_opts = [stream: stream, group_name: group_name] ++ Keyword.take(opts, [:start_id])
-        DynamicSupervisor.start_child(MiniBroker.GroupSupervisor, {ConsumerGroup, group_opts})
+        DynamicSupervisor.start_child(OrcaMQ.GroupSupervisor, {ConsumerGroup, group_opts})
 
       pid ->
         {:ok, pid}

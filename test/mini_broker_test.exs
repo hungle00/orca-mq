@@ -1,12 +1,12 @@
-defmodule MiniBrokerTest do
+defmodule OrcaMQTest do
   use ExUnit.Case
-  doctest MiniBroker
+  doctest OrcaMQ
 
-  alias MiniBroker.MessageStore
+  alias OrcaMQ.MessageStore
 
   test "publish/2 push messages successfully" do
     assert {:ok, msg_id} =
-             MiniBroker.publish("notifications", %{type: "email", to: "user@test.com"})
+             OrcaMQ.publish("notifications", %{type: "email", to: "user@test.com"})
 
     assert is_binary(msg_id)
 

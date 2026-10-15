@@ -1,8 +1,20 @@
-defmodule MiniBroker.ConsumerGroupTest do
+defmodule OrcaMQ.ConsumerGroupTest do
   use ExUnit.Case, async: false
 
-  alias MiniBroker.ConsumerGroup
-  alias MiniBroker.MessageStore
+  alias OrcaMQ.ConsumerGroup
+  alias OrcaMQ.MessageStore
+
+  test "fetch/4 creates a remote consumer group and returns messages for acknowledgement" do
+    stream = "remote-consumer-fetch"
+    group = "remote-consumer-fetch"
+    message_id = "1-0"
+    :ok = MessageStore.put(stream, message_id, :payload)
+
+    assert [%MessageStore{id: ^message_id, payload: :payload}] =
+             OrcaMQ.fetch(stream, group, self(), 10)
+
+    assert :ok = OrcaMQ.ack(stream, group, message_id)
+  end
 
   test "fetch_messages/4 reads the entire stream in batches larger than 1,000 messages" do
     stream = "consumer-group-large-stream"

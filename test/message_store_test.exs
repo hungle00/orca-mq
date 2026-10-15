@@ -1,7 +1,7 @@
-defmodule MiniBroker.MessageStoreTest do
+defmodule OrcaMQ.MessageStoreTest do
   use ExUnit.Case, async: false
 
-  alias MiniBroker.MessageStore
+  alias OrcaMQ.MessageStore
 
   test "list/2 returns IDs in numeric order across ETS select pages" do
     stream = "message-store-numeric-order"

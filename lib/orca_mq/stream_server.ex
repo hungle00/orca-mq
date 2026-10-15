@@ -1,4 +1,4 @@
-defmodule MiniBroker.StreamServer do
+defmodule OrcaMQ.StreamServer do
   @moduledoc """
   Publishes messages, generates stream IDs in the `timestamp_ms-sequence` format,
   and interacts with MessageStore.
@@ -6,7 +6,7 @@ defmodule MiniBroker.StreamServer do
 
   use GenServer
 
-  alias MiniBroker.MessageStore
+  alias OrcaMQ.MessageStore
 
   # State stores the last timestamp and sequence number for each stream.
   # State format: %{stream_name => {last_time_ms, sequence}}

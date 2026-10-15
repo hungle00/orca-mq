@@ -1,9 +1,9 @@
-defmodule MiniBroker.MixProject do
+defmodule OrcaMQ.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :mini_broker,
+      app: :orca_mq,
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
@@ -15,7 +15,7 @@ defmodule MiniBroker.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {MiniBroker.Application, []}
+      mod: {OrcaMQ.Application, []}
     ]
   end
 

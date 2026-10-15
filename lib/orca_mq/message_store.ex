@@ -1,4 +1,4 @@
-defmodule MiniBroker.MessageStore do
+defmodule OrcaMQ.MessageStore do
   @moduledoc """
   Manages the ETS table that stores messages.
   Provides a public API for accessing and updating the table.
