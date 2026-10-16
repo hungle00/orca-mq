@@ -38,8 +38,7 @@ test_pid = self()
 
       :ok
     end,
-    poll_interval: 1,
-    batch_size: 100
+    prefetch: 100
   )
 
 # ===================================================================
@@ -80,7 +79,7 @@ consume_start_time = System.monotonic_time(:millisecond)
 receive do
   {:group_done, :group_a} -> IO.puts("   -> Group A (Notifications) finished all messages!")
 after
-  30_000 -> IO.puts("   ❌ Group A Timeout!")
+  30_000 -> raise "Consumer group did not finish within 30 seconds"
 end
 
 
@@ -93,7 +92,7 @@ IO.puts("                BENCHMARK RESULTS                 ")
 IO.puts("==================================================")
 IO.puts("Published Messages       : #{total_messages}")
 IO.puts("Ingestion Speed          : #{publish_tps} msgs/sec")
-IO.puts("Consumption Speed        : #{consume_tps} msgs/sec")
+IO.puts("End-to-end Speed         : #{consume_tps} msgs/sec")
 IO.puts("--------------------------------------------------")
 
 # VERIFY DATA IN ETS

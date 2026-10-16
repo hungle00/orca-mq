@@ -19,7 +19,7 @@ group = "fraud_checkers"
     IO.inspect(msg.payload, label: "-> [Consumer Received]")
     :ok
   end,
-  poll_interval: 50
+  prefetch: 50
 )
 
 # 2. Publishing messages
@@ -33,6 +33,9 @@ OrcaMQ.publish(stream, %{transaction_id: "tx_102", amount: 1200})
 
 # 3. Checking Group Status
 IO.inspect(OrcaMQ.ConsumerGroup.info(stream, group))
+
+# Internal subscribers use push delivery. `prefetch` limits each consumer to that
+# many messages delivered without acknowledgement; the default is 10.
 ```
 
 ## Running on Multiple Nodes (Distributed Erlang)

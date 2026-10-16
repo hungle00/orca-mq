@@ -1,21 +1,21 @@
-# OrcaMQ 🚀
+# OrcaMQ
 
-A lightweight, high-concurrency, in-memory message broker written in **Elixir/OTP**. Inspired by **Redis Streams** (ID-based sequence, consumer groups, PEL) and **RabbitMQ** (Exchanges, Fan-out, Topic routing).
+<img src="logo/OrcaMQ-mascot.png" alt="OrcaMQ" width="500">
+
+A lightweight, high-concurrency, in-memory message broker written in **Elixir/OTP**. Inspired by **Redis Streams** (ID-based sequence, consumer groups, PEL).
 
 Built from the ground up leveraging **ETS** with parallel read/write concurrency for zero-bottleneck data ingestion, combined with native BEAM process isolation for state management.
-
----
 
 ## Key Features
 
 - **High Performance In-Memory Storage:** Powered by ETS (`:public`, `:ordered_set`, `:bag`) enabling concurrent read/write throughput without GenServer lock contention.
+- **Push-based Consumers:** Internal subscribers are notified when messages arrive; configurable prefetch limits unacknowledged deliveries per consumer.
 - **Consumer Groups & PEL:** Tracks reading offsets per consumer group along with a Pending Entries List (PEL) to guarantee at-least-once message delivery.
-- **Flexible Routing (Exchanges):** Supports both **Fan-out** (publish-subscribe) and **Topic routing** with wildcard matching (`*` and `#`).
 - **Distributed Erlang Native:** Seamless clustering across multiple nodes via native Erlang RPC and message passing without external network layers.
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites  
 - Elixir: 1.14+

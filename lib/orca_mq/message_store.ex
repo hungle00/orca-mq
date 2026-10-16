@@ -8,7 +8,6 @@ defmodule OrcaMQ.MessageStore do
 
   @table_name :orca_messages
 
-  # Struct representing a message in the store.
   defstruct [:id, :stream, :payload, :timestamp]
 
   @type t :: %__MODULE__{
@@ -18,20 +17,12 @@ defmodule OrcaMQ.MessageStore do
           timestamp: integer()
         }
 
-  # ===================================================================
-  # Public API
-  # ===================================================================
-
-  @doc """
-  Starts the MessageStore GenServer.
-  """
+  @doc "Starts the MessageStore GenServer."
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc """
-  Stores a message.
-  """
+  @doc "Stores a message."
   @spec put(String.t(), binary() | integer(), term()) :: :ok
   def put(stream, message_id, payload) do
     record = %__MODULE__{
@@ -41,53 +32,42 @@ defmodule OrcaMQ.MessageStore do
       timestamp: System.system_time(:millisecond)
     }
 
-    # ETS object format: {{stream, message_id}, record}.
-    # The composite key {stream, message_id} enables stream-scoped lookups and ordering.
-    :ets.insert(@table_name, {{stream, message_id}, record})
+    key = {stream, stream_id_key(message_id)}
+    :ets.insert(@table_name, {key, record})
     :ok
   end
 
-  @doc """
-  Retrieves a message by stream and message ID.
-  """
+  @doc "Retrieves a message by stream and message ID."
   @spec get(String.t(), binary() | integer()) :: {:ok, t()} | {:error, :not_found}
   def get(stream, message_id) do
-    case :ets.lookup(@table_name, {stream, message_id}) do
-      [{{^stream, ^message_id}, %__MODULE__{} = message}] -> {:ok, message}
+    key = {stream, stream_id_key(message_id)}
+
+    case :ets.lookup(@table_name, key) do
+      [{^key, %__MODULE__{} = message}] -> {:ok, message}
       [] -> {:error, :not_found}
     end
   end
 
   @doc """
-  Retrieves messages from a stream.
-  Supports limiting the number of returned messages with `:limit` and retrieving
-  messages after a stream ID with `:after_id`.
+  Retrieves messages from a stream in stream-ID order.
+  Supports limiting the number returned with `:limit` and starting after `:after_id`.
   """
   @spec list(String.t(), keyword()) :: [t()]
   def list(stream, opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
     after_id = Keyword.get(opts, :after_id)
 
-    match_spec = [
-      {{{stream, :"$1"}, :"$2"}, [], [:"$2"]}
-    ]
-
-    @table_name
-    |> select_all(match_spec)
-    |> Enum.sort_by(&stream_id_key(&1.id))
-    |> Enum.filter(fn message ->
-      is_nil(after_id) or stream_id_key(message.id) > stream_id_key(after_id)
-    end)
-    |> Enum.take(limit)
+    if limit <= 0 do
+      []
+    else
+      cursor = {stream, if(is_nil(after_id), do: :start, else: stream_id_key(after_id))}
+      next = :ets.next(@table_name, cursor)
+      collect_stream_messages(@table_name, next, stream, limit, [])
+    end
   end
-
-  # ===================================================================
-  # GenServer Callbacks
-  # ===================================================================
 
   @impl true
   def init(_opts) do
-    # Create the ETS table with concurrency optimizations.
     table =
       :ets.new(@table_name, [
         :ordered_set,
@@ -100,23 +80,22 @@ defmodule OrcaMQ.MessageStore do
     {:ok, %{table: table}}
   end
 
-  defp select_all(table, match_spec) do
-    case :ets.select(table, match_spec, 1_000) do
-      {records, continuation} -> continue_select(continuation, records)
-      :"$end_of_table" -> []
-    end
+  defp collect_stream_messages(_table, _key, _stream, 0, messages),
+    do: Enum.reverse(messages)
+
+  defp collect_stream_messages(_table, :"$end_of_table", _stream, _remaining, messages),
+    do: Enum.reverse(messages)
+
+  defp collect_stream_messages(table, {stream, _} = key, stream, remaining, messages) do
+    [{^key, message}] = :ets.lookup(table, key)
+
+    collect_stream_messages(table, :ets.next(table, key), stream, remaining - 1, [
+      message | messages
+    ])
   end
 
-  defp continue_select(continuation, records) do
-    case :ets.select(continuation) do
-      {next_records, next_continuation} ->
-        next_records = Enum.reduce(next_records, records, fn record, acc -> [record | acc] end)
-        continue_select(next_continuation, next_records)
-
-      :"$end_of_table" ->
-        records
-    end
-  end
+  defp collect_stream_messages(_table, _key, _stream, _remaining, messages),
+    do: Enum.reverse(messages)
 
   defp stream_id_key(id) when is_integer(id), do: {0, id, 0}
 
