@@ -4,8 +4,8 @@
 stream_name = "orders_high_load"
 
 # Benchmark Configuration
-total_publishers = 20
-messages_per_publisher = 1000   # Each process push 1,000 msgs => 20,000 msgs
+total_publishers = 50
+messages_per_publisher = 2000   # Each process push 1,000 msgs => 20,000 msgs
 total_messages = total_publishers * messages_per_publisher
 
 IO.puts("==================================================")
@@ -38,8 +38,7 @@ test_pid = self()
 
       :ok
     end,
-    poll_interval: 1,
-    batch_size: 100
+    prefetch: 100
   )
 
 # ===================================================================
@@ -75,12 +74,12 @@ IO.puts("   Throughput     : #{publish_tps} msgs/sec")
 # ===================================================================
 
 IO.puts("\n [2/2] Processing Messages In Consumer Groups...")
-consume_start_time = System.monotonic_time(:millisecond)
+consume_start_time = publish_start_time
 
 receive do
   {:group_done, :group_a} -> IO.puts("   -> Group A (Notifications) finished all messages!")
 after
-  30_000 -> IO.puts("   ❌ Group A Timeout!")
+  30_000 -> raise "Consumer group did not finish within 30 seconds"
 end
 
 
@@ -93,7 +92,7 @@ IO.puts("                BENCHMARK RESULTS                 ")
 IO.puts("==================================================")
 IO.puts("Published Messages       : #{total_messages}")
 IO.puts("Ingestion Speed          : #{publish_tps} msgs/sec")
-IO.puts("Consumption Speed        : #{consume_tps} msgs/sec")
+IO.puts("End-to-end Speed         : #{consume_tps} msgs/sec")
 IO.puts("--------------------------------------------------")
 
 # VERIFY DATA IN ETS

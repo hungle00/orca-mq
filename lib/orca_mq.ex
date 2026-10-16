@@ -31,7 +31,10 @@ defmodule OrcaMQ do
 
   @doc """
   Subscribes a consumer to a stream with the given group name and handler function.
-  Starts the consumer group if it does not exist, then starts a consumer worker.
+  Starts the consumer group if it does not exist, then starts a push-based consumer.
+  The `:prefetch` option limits messages delivered without acknowledgement per
+  consumer and defaults to 10. The legacy `:batch_size` option is used as an alias
+  when `:prefetch` is not set.
   """
   @spec subscribe(String.t(), String.t(), (term() -> :ok | {:error, term()}), keyword()) ::
           {:ok, pid()} | {:error, term()}

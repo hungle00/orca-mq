@@ -10,6 +10,7 @@ defmodule OrcaMQ.Application do
     children = [
       # The Registry tracks ConsumerGroup processes by {stream, group_name}.
       {Registry, keys: :unique, name: OrcaMQ.GroupRegistry},
+      {Registry, keys: :duplicate, name: OrcaMQ.StreamRegistry},
       # The DynamicSupervisor starts ConsumerGroup processes when subscribe/3 is called.
       {DynamicSupervisor, strategy: :one_for_one, name: OrcaMQ.GroupSupervisor},
       OrcaMQ.MessageStore,

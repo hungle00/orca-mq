@@ -3,7 +3,7 @@ defmodule OrcaMQ.MessageStoreTest do
 
   alias OrcaMQ.MessageStore
 
-  test "list/2 returns IDs in numeric order across ETS select pages" do
+  test "list/2 returns IDs in numeric order across ETS pages" do
     stream = "message-store-numeric-order"
 
     for sequence <- 0..1_104 do
