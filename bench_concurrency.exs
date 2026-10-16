@@ -4,8 +4,8 @@
 stream_name = "orders_high_load"
 
 # Benchmark Configuration
-total_publishers = 50
-messages_per_publisher = 2000   # Each process push 1,000 msgs => 20,000 msgs
+total_publishers = 20
+messages_per_publisher = 1000   # Each process push 1,000 msgs => 20,000 msgs
 total_messages = total_publishers * messages_per_publisher
 
 IO.puts("==================================================")
@@ -74,7 +74,7 @@ IO.puts("   Throughput     : #{publish_tps} msgs/sec")
 # ===================================================================
 
 IO.puts("\n [2/2] Processing Messages In Consumer Groups...")
-consume_start_time = publish_start_time
+consume_start_time = System.monotonic_time(:millisecond)
 
 receive do
   {:group_done, :group_a} -> IO.puts("   -> Group A (Notifications) finished all messages!")

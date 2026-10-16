@@ -3,6 +3,7 @@ defmodule OrcaMQ.ConsumerGroupTest do
 
   alias OrcaMQ.ConsumerGroup
   alias OrcaMQ.MessageStore
+  alias OrcaMQ.StreamServer
 
   test "fetch/4 creates a remote consumer group and returns messages for acknowledgement" do
     stream = "remote-consumer-fetch"
@@ -91,6 +92,25 @@ defmodule OrcaMQ.ConsumerGroupTest do
     assert_receive {:started, _third_id}, 1_000
     send(consumer, :continue)
     assert wait_until(fn -> ConsumerGroup.info(stream, group).pending_count == 0 end)
+  end
+
+  test "ack/3 remove message from Pending List (PEL)" do
+    stream = "orders"
+    group = "billing_workers"
+
+    {:ok, _id1} = StreamServer.publish(stream, "order_1")
+    {:ok, _pid} = ConsumerGroup.start_link(stream: stream, group_name: group)
+
+    [msg] = ConsumerGroup.fetch_messages(stream, group, self(), 1)
+
+    assert :ok == ConsumerGroup.ack(stream, group, msg.id)
+
+    # Ensure message is not in PEL
+    info = ConsumerGroup.info(stream, group)
+    assert info.pending_count == 0
+
+    # ACK the message with throw error
+    assert {:error, :not_pending} == ConsumerGroup.ack(stream, group, msg.id)
   end
 
   test "messages assigned to a terminated consumer are redelivered" do
