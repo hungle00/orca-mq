@@ -1,35 +1,95 @@
 # OrcaMQ
 
-<img src="logo/OrcaMQ-mascot.png" alt="OrcaMQ" width="500">
+<p align="center">
+  <img src="assets/logo/OrcaMQ-mascot.png" alt="OrcaMQ mascot" width="400">
+</p>
 
-A lightweight, high-concurrency, in-memory message broker written in **Elixir/OTP**. Inspired by **Redis Streams** (ID-based sequence, consumer groups, PEL).
+<p align="center">
+  A lightweight, in-memory message broker built with <strong>Elixir and OTP</strong>.
+  <br>
+  It is inspired by the consumer group model of Redis Streams.
+</p>
 
-Built from the ground up leveraging **ETS** with parallel read/write concurrency for zero-bottleneck data ingestion, combined with native BEAM process isolation for state management.
+---
 
-## Key Features
+## Overview
+
+OrcaMQ is a lightweight, in-memory message broker built with Elixir/OTP, combining the consumer group and acknowledgement model of Redis Streams with push-based message delivery inspired by Redis Pub/Sub.
+
+It explores an alternative approach to message delivery using ETS and the concurrency model of the BEAM.
+
+## Features
 
 - **High Performance In-Memory Storage:** Powered by ETS (`:public`, `:ordered_set`, `:bag`) enabling concurrent read/write throughput without GenServer lock contention.
 - **Push-based Consumers:** Internal subscribers are notified when messages arrive; configurable prefetch limits unacknowledged deliveries per consumer.
 - **Consumer Groups & PEL:** Tracks reading offsets per consumer group along with a Pending Entries List (PEL) to guarantee at-least-once message delivery.
 - **Distributed Erlang Native:** Seamless clustering across multiple nodes via native Erlang RPC and message passing without external network layers.
+- **Docker Support** — Run the broker as a standalone service in a container.
 
----
 
-##  Getting Started
+## Architecture
 
-### Prerequisites  
-- Elixir: 1.14+
-- Erlang/OTP: 25+
+OrcaMQ is built around three core ideas:
 
-### Installation & Setup
+- **ETS for message storage:** Enables concurrent access without routing every storage operation through a single GenServer.
+- **BEAM processes for coordination:** Separates broker responsibilities into concurrent processes.
+- **Consumer groups and acknowledgements:** Track consumption progress and outstanding deliveries independently of message publishing.
 
-1. Clone the repository:
-```
-git clone https://github.com/hungle00/orca-mq
+The combination provides a practical foundation for exploring message delivery, consumer coordination, and fault-tolerant services in the Elixir ecosystem.
+
+## Getting Started
+
+### Prerequisites
+
+- Elixir 1.14+
+- Erlang/OTP 25+
+- Docker and Docker Compose (for containerized deployment)
+
+### Run with Docker
+
+Build the image:
+
+```bash
+git clone https://github.com/hungle00/orca-mq.git
 cd orca-mq
+
+docker build -t orca-mq:latest .
 ```
 
-2. Fetch dependencies:
+Start the broker:
+
+```bash
+docker run -d \
+  -p 5555:5555 \
+  --name orcamq_server \
+  orca-mq:latest
 ```
-mix deps.get
+
+Alternatively, use Docker Compose:
+
+```bash
+docker compose up -d
 ```
+
+The server should report a startup message similar to:
+
+```text
+OrcaMQ server running on 0.0.0.0:5555
+```
+
+## Technology Stack
+
+- **Language:** Elixir
+- **Runtime:** Erlang/OTP and BEAM
+- **Storage:** ETS
+- **Deployment:** Docker and Docker Compose
+
+## Project Status
+
+OrcaMQ is an independent project built to explore message broker design and Elixir/OTP concurrency.
+
+Contributions, feedback, and ideas are welcome.
+
+## License
+
+See [LICENSE](LICENSE) for licensing information.
