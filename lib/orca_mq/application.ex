@@ -5,6 +5,8 @@ defmodule OrcaMQ.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     tcp_port = String.to_integer(System.get_env("PORT") || "5555")
@@ -18,9 +20,9 @@ defmodule OrcaMQ.Application do
       OrcaMQ.MessageStore,
       # StreamServer depends on MessageStore.
       OrcaMQ.StreamServer,
-      # Khởi chạy Ranch TCP Server Acceptor Pool
+      # Start the Ranch TCP server acceptor pool.
       :ranch.child_spec(
-        :minibroker_tcp,
+        :orcamq_tcp,
         :ranch_tcp,
         %{socket_opts: [port: tcp_port]},
         OrcaMQ.Server.TCPProtocol,
@@ -30,6 +32,15 @@ defmodule OrcaMQ.Application do
 
     # See https://hexdocs.pm/elixir/Supervisor.html for other strategies and supported options.
     opts = [strategy: :one_for_one, name: OrcaMQ.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, pid} ->
+        {ip, port} = :ranch.get_addr(:orcamq_tcp)
+        Logger.info("OrcaMQ server running on #{:inet.ntoa(ip)}:#{port}")
+        {:ok, pid}
+
+      error ->
+        error
+    end
   end
 end

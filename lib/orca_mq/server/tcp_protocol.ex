@@ -1,7 +1,7 @@
 defmodule OrcaMQ.Server.TCPProtocol do
   @moduledoc """
-  Handler xử lý kết nối TCP chuẩn production triển khai :ranch_protocol.
-  Mỗi client kết nối vào sẽ do 1 process riêng của module này quản lý.
+  Production TCP connection handler implementing `:ranch_protocol`.
+  Each client connection is managed by a separate process of this module.
   """
 
   @behaviour :ranch_protocol
@@ -21,13 +21,13 @@ defmodule OrcaMQ.Server.TCPProtocol do
 
   @doc false
   def init(ref, transport) do
-    # Bắt buộc handshake với Ranch để chuyển ownership của socket về process này
+    # Complete the Ranch handshake to transfer socket ownership to this process.
     {:ok, socket} = :ranch.handshake(ref)
 
-    # Đặt socket ở chế độ active: :once để chống tràn bộ nhớ (Backpressure management)
+    # Use active-once mode to provide backpressure and prevent unbounded buffering.
     :ok = transport.setopts(socket, [{:active, :once}, {:packet, :line}])
 
-    # Vòng lặp nhận dữ liệu
+    # Start receiving data.
     loop(socket, transport, %{subscribed: false})
   end
 
@@ -37,26 +37,26 @@ defmodule OrcaMQ.Server.TCPProtocol do
 
   defp loop(socket, transport, state) do
     receive do
-      # Khi nhận được packet từ TCP Client
+      # Handle a packet received from the TCP client.
       {:tcp, ^socket, data} ->
         line = String.trim(data)
         new_state = handle_command(line, socket, transport, state)
 
-        # Bật lại active: :once cho đợt packet tiếp theo
+        # Enable active-once mode for the next packet.
         transport.setopts(socket, [{:active, :once}])
         loop(socket, transport, new_state)
 
-      # Khi client chủ động đóng kết nối TCP
+      # Handle the client closing the TCP connection.
       {:tcp_closed, ^socket} ->
         Logger.info("Client disconnected normally.")
         :ok
 
-      # Khi xảy ra lỗi đường truyền
+      # Handle a TCP connection error.
       {:tcp_error, ^socket, reason} ->
         Logger.error("TCP socket error: #{inspect(reason)}")
         :ok
 
-      # Xử lý tin nhắn push từ OrcaMQ Consumer
+      # Handle a message pushed by an OrcaMQ consumer.
       {:deliver_msg, msg} ->
         payload_str = Poison.encode!(msg.payload)
         transport.send(socket, "MSG #{msg.stream} #{msg.id} #{payload_str}\r\n")
@@ -74,23 +74,20 @@ defmodule OrcaMQ.Server.TCPProtocol do
 
   defp handle_command(line, socket, transport, state) do
     case String.split(line, " ", parts: 3) do
-      # 1. Lệnh Publish: PUB <stream> <payload>
+      # 1. Publish command: PUB <stream> <payload>
       ["PUB", stream, payload] ->
         case OrcaMQ.publish(stream, payload) do
           {:ok, msg_id} ->
             transport.send(socket, "OK #{msg_id}\r\n")
-
-          {:error, reason} ->
-            transport.send(socket, "ERROR #{inspect(reason)}\r\n")
         end
 
         state
 
-      # 2. Lệnh Subscribe: SUB <stream> <group>
+      # 2. Subscribe command: SUB <stream> <group>
       ["SUB", stream, group] ->
         self_pid = self()
 
-        # Đăng ký subscribe: khi có msg mới, gửi message {:deliver_msg, msg} tới process hiện tại
+        # Forward new messages to the current process as {:deliver_msg, msg}.
         {:ok, _consumer_pid} =
           OrcaMQ.subscribe(
             stream,
@@ -105,7 +102,7 @@ defmodule OrcaMQ.Server.TCPProtocol do
         transport.send(socket, "OK SUBSCRIBED_TO_#{stream}_GROUP_#{group}\r\n")
         %{state | subscribed: true}
 
-      # Lệnh Ping test kết nối
+      # Ping command for testing the connection.
       ["PING"] ->
         transport.send(socket, "PONG\r\n")
         state
