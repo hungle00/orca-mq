@@ -19,10 +19,11 @@ defmodule OrcaMQTest do
     group = "manual_ack_workers"
 
     # Khởi tạo Group
-    {:ok, _} = DynamicSupervisor.start_child(
-      OrcaMQ.GroupSupervisor,
-      {OrcaMQ.ConsumerGroup, stream: stream, group_name: group}
-    )
+    {:ok, _} =
+      DynamicSupervisor.start_child(
+        OrcaMQ.GroupSupervisor,
+        {OrcaMQ.ConsumerGroup, stream: stream, group_name: group}
+      )
 
     {:ok, msg_id} = OrcaMQ.publish(stream, "task_payload")
 

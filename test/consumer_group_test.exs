@@ -58,6 +58,32 @@ defmodule OrcaMQ.ConsumerGroupTest do
     assert_receive {:handled, :pushed_message}, 1_000
   end
 
+  test "consumer handler failures NACK and eventually move the message to dead letter" do
+    stream = "consumer-handler-failure"
+    group = "consumer-handler-failure"
+
+    assert {:ok, _consumer} =
+             OrcaMQ.subscribe(stream, group, fn _message ->
+               {:error, :handler_failed}
+             end)
+
+    assert {:ok, message_id} = OrcaMQ.publish(stream, :fail_me)
+
+    assert wait_until(fn ->
+             match?([_], MessageStore.list("#{stream}:dead_letter"))
+           end)
+
+    assert [
+             %MessageStore{
+               payload: %{
+                 original_id: ^message_id,
+                 original_msg: :fail_me,
+                 total_retries: 3
+               }
+             }
+           ] = MessageStore.list("#{stream}:dead_letter")
+  end
+
   test "prefetch limits pending delivery and acknowledgements release capacity" do
     stream = "push-consumer-prefetch"
     group = "push-consumer-prefetch"
@@ -103,6 +129,7 @@ defmodule OrcaMQ.ConsumerGroupTest do
 
     [msg] = ConsumerGroup.fetch_messages(stream, group, self(), 1)
 
+    assert ConsumerGroup.info(stream, group).pending_entries[msg.id].retry_count == 0
     assert :ok == ConsumerGroup.ack(stream, group, msg.id)
 
     # Ensure message is not in PEL
@@ -111,6 +138,40 @@ defmodule OrcaMQ.ConsumerGroupTest do
 
     # ACK the message with throw error
     assert {:error, :not_pending} == ConsumerGroup.ack(stream, group, msg.id)
+  end
+
+  test "nack retries up to max_retries, then moves the message to the dead-letter stream" do
+    stream = "consumer-group-nack-retries"
+    group = "consumer-group-nack-retries"
+
+    start_supervised!({ConsumerGroup, stream: stream, group_name: group, max_retries: 2})
+
+    assert :ok = ConsumerGroup.register_consumer(stream, group, self(), 1)
+    assert {:error, :not_pending} = ConsumerGroup.nack(stream, group, "missing-message")
+    assert {:ok, message_id} = StreamServer.publish(stream, %{order_id: 42})
+
+    assert_receive {:deliver, %{id: ^message_id}}, 1_000
+    assert :ok = ConsumerGroup.nack(stream, group, message_id)
+    assert_receive {:deliver, %{id: ^message_id}}, 1_000
+    assert ConsumerGroup.info(stream, group).pending_entries[message_id].retry_count == 1
+
+    assert :ok = ConsumerGroup.nack(stream, group, message_id)
+    assert_receive {:deliver, %{id: ^message_id}}, 1_000
+    assert ConsumerGroup.info(stream, group).pending_entries[message_id].retry_count == 2
+
+    assert {:ok, :dead_lettered} = ConsumerGroup.nack(stream, group, message_id)
+    assert ConsumerGroup.info(stream, group).pending_count == 0
+
+    assert [
+             %MessageStore{
+               payload: %{
+                 original_msg: %{order_id: 42},
+                 original_id: ^message_id,
+                 failed_group: ^group,
+                 total_retries: 2
+               }
+             }
+           ] = MessageStore.list("#{stream}:dead_letter")
   end
 
   test "messages assigned to a terminated consumer are redelivered" do
@@ -143,13 +204,16 @@ defmodule OrcaMQ.ConsumerGroupTest do
                stream,
                group,
                fn message ->
-                 send(parent, {:redelivered, message.payload})
+                 retry_count =
+                   ConsumerGroup.info(stream, group).pending_entries[message.id].retry_count
+
+                 send(parent, {:redelivered, message.payload, retry_count})
                  :ok
                end,
                prefetch: 1
              )
 
-    assert_receive {:redelivered, :retry_me}, 1_000
+    assert_receive {:redelivered, :retry_me, 1}, 1_000
     assert wait_until(fn -> ConsumerGroup.info(stream, group).pending_count == 0 end)
   end
 

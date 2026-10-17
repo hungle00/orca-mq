@@ -6,12 +6,16 @@ defmodule OrcaMQ.ConsumerGroup do
   use GenServer
   require Logger
 
+  @default_max_retries 3
+
   alias OrcaMQ.MessageStore
+  alias OrcaMQ.StreamServer
 
   defstruct [
     :stream,
     :group_name,
     :last_delivered_id,
+    :max_retries,
     pending: %{},
     consumers: %{}
   ]
@@ -20,7 +24,14 @@ defmodule OrcaMQ.ConsumerGroup do
           stream: String.t(),
           group_name: String.t(),
           last_delivered_id: String.t() | nil,
-          pending: %{binary() => {pid() | nil, integer()}},
+          max_retries: integer(),
+          pending: %{
+            binary() => %{
+              consumer_pid: pid() | nil,
+              delivered_at: integer(),
+              retry_count: non_neg_integer()
+            }
+          },
           consumers: %{pid() => %{prefetch: pos_integer(), monitor_ref: reference()}}
         }
 
@@ -46,6 +57,10 @@ defmodule OrcaMQ.ConsumerGroup do
     call_group(stream, group_name, {:ack, message_id})
   end
 
+  def nack(stream, group_name, message_id) do
+    call_group(stream, group_name, {:nack, message_id})
+  end
+
   @doc "Returns the current consumer group state, including its offset and pending entries list."
   @spec info(String.t(), String.t()) :: map()
   def info(stream, group_name) do
@@ -64,15 +79,18 @@ defmodule OrcaMQ.ConsumerGroup do
   end
 
   @impl true
+  @spec init(keyword()) :: {:ok, OrcaMQ.ConsumerGroup.t()}
   def init(opts) do
     stream = Keyword.fetch!(opts, :stream)
     group_name = Keyword.fetch!(opts, :group_name)
+    max_retries = Keyword.get(opts, :max_retries, @default_max_retries)
     {:ok, _registry_pid} = Registry.register(OrcaMQ.StreamRegistry, stream, nil)
 
     state = %__MODULE__{
       stream: stream,
       group_name: group_name,
-      last_delivered_id: Keyword.get(opts, :start_id, "0-0")
+      last_delivered_id: Keyword.get(opts, :start_id, "0-0"),
+      max_retries: max_retries
     }
 
     {:ok, state}
@@ -112,6 +130,16 @@ defmodule OrcaMQ.ConsumerGroup do
     end
   end
 
+  def handle_call({:nack, message_id}, _from, state) do
+    case Map.get(state.pending, message_id) do
+      nil ->
+        {:reply, {:error, :not_pending}, state}
+
+      metadata ->
+        handle_nack(state, message_id, metadata)
+    end
+  end
+
   def handle_call(:info, _from, state) do
     info_map = %{
       stream: state.stream,
@@ -136,8 +164,11 @@ defmodule OrcaMQ.ConsumerGroup do
       %{monitor_ref: ^monitor_ref} ->
         pending =
           Map.new(state.pending, fn
-            {message_id, {^consumer_pid, delivered_at}} -> {message_id, {nil, delivered_at}}
-            entry -> entry
+            {message_id, %{consumer_pid: ^consumer_pid} = metadata} ->
+              {message_id, %{metadata | consumer_pid: nil}}
+
+            entry ->
+              entry
           end)
 
         state = %{state | consumers: Map.delete(state.consumers, consumer_pid), pending: pending}
@@ -164,7 +195,10 @@ defmodule OrcaMQ.ConsumerGroup do
 
   defp dispatch_to_consumer(state, consumer_pid) do
     consumer = Map.fetch!(state.consumers, consumer_pid)
-    in_flight = Enum.count(state.pending, fn {_id, {owner, _time}} -> owner == consumer_pid end)
+
+    in_flight =
+      Enum.count(state.pending, fn {_id, %{consumer_pid: owner}} -> owner == consumer_pid end)
+
     available = max(consumer.prefetch - in_flight, 0)
     {state, available} = redeliver_pending(state, consumer_pid, available)
 
@@ -182,21 +216,95 @@ defmodule OrcaMQ.ConsumerGroup do
 
   defp redeliver_pending(state, consumer_pid, available) do
     state.pending
-    |> Enum.filter(fn {_id, {owner, _time}} -> is_nil(owner) end)
+    |> Enum.filter(fn {_id, %{consumer_pid: owner}} -> is_nil(owner) end)
     |> Enum.sort_by(fn {id, _entry} -> stream_id_key(id) end)
     |> Enum.take(available)
-    |> Enum.reduce({state, available}, fn {message_id, {_owner, delivered_at}}, {acc, slots} ->
-      case MessageStore.get(acc.stream, message_id) do
-        {:ok, message} ->
-          send(consumer_pid, {:deliver, message})
-          pending = Map.put(acc.pending, message_id, {consumer_pid, delivered_at})
-          {%{acc | pending: pending}, slots - 1}
+    |> Enum.reduce({state, available}, fn {message_id, metadata}, {acc, slots} ->
+      if metadata.retry_count >= acc.max_retries do
+        case publish_dead_letter(acc, message_id, metadata.retry_count) do
+          {:ok, new_state} ->
+            {new_state, slots}
 
-        {:error, reason} ->
-          Logger.error("Could not redeliver pending message #{message_id}: #{inspect(reason)}")
-          {acc, slots}
+          {:error, reason} ->
+            Logger.error("Could not dead-letter message #{message_id}: #{inspect(reason)}")
+            {acc, slots}
+        end
+      else
+        case MessageStore.get(acc.stream, message_id) do
+          {:ok, message} ->
+            send(consumer_pid, {:deliver, message})
+
+            pending =
+              Map.put(acc.pending, message_id, %{
+                consumer_pid: consumer_pid,
+                delivered_at: System.system_time(:millisecond),
+                retry_count: metadata.retry_count + 1
+              })
+
+            {%{acc | pending: pending}, slots - 1}
+
+          {:error, reason} ->
+            Logger.error("Could not redeliver pending message #{message_id}: #{inspect(reason)}")
+            {acc, slots}
+        end
       end
     end)
+  end
+
+  defp handle_nack(state, message_id, metadata) do
+    elapsed = System.system_time(:millisecond) - metadata.delivered_at
+
+    if elapsed > 0 do
+      Logger.info(
+        "Message #{message_id} NACKed after #{elapsed} ms by #{inspect(metadata.consumer_pid)}"
+      )
+    end
+
+    if metadata.retry_count >= state.max_retries do
+      case publish_dead_letter(state, message_id, metadata.retry_count) do
+        {:ok, state} ->
+          state = dispatch_available(state)
+          {:reply, {:ok, :dead_lettered}, state}
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    else
+      Logger.info(
+        "Message #{message_id} NACKed by #{inspect(metadata.consumer_pid)}. " <>
+          "Retry count: #{metadata.retry_count}/#{state.max_retries}"
+      )
+
+      pending = Map.put(state.pending, message_id, %{metadata | consumer_pid: nil})
+      state = %{state | pending: pending} |> dispatch_available()
+      {:reply, :ok, state}
+    end
+  end
+
+  defp publish_dead_letter(state, message_id, retry_count) do
+    with {:ok, message} <- MessageStore.get(state.stream, message_id),
+         {:ok, dls_id} <-
+           StreamServer.publish("#{state.stream}:dead_letter", %{
+             original_msg: message.payload,
+             original_id: message_id,
+             failed_group: state.group_name,
+             failed_at: DateTime.utc_now(),
+             total_retries: retry_count
+           }) do
+      Logger.warning(
+        "Message #{message_id} exceeded max retries (#{state.max_retries}). " <>
+          "Moved to dead-letter stream with ID #{dls_id}."
+      )
+
+      pending = Map.delete(state.pending, message_id)
+      {:ok, %{state | pending: pending}}
+    else
+      {:error, :not_found} ->
+        {:error, :message_not_found}
+
+      {:error, reason} ->
+        {:error, {:dead_letter_publish_failed, reason}}
+    end
   end
 
   defp fetch_new_messages(state, consumer_pid, count, push?) do
@@ -207,7 +315,14 @@ defmodule OrcaMQ.ConsumerGroup do
       Enum.reduce(messages, {state.pending, state.last_delivered_id}, fn message,
                                                                          {pending, _last_id} ->
         if push?, do: send(consumer_pid, {:deliver, message})
-        {Map.put(pending, message.id, {consumer_pid, now}), message.id}
+
+        metadata = %{
+          consumer_pid: consumer_pid,
+          delivered_at: now,
+          retry_count: 0
+        }
+
+        {Map.put(pending, message.id, metadata), message.id}
       end)
 
     {messages, %{state | pending: pending, last_delivered_id: last_delivered_id}}

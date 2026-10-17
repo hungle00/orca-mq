@@ -53,9 +53,29 @@ defmodule OrcaMQ.Consumer do
 
       {:error, reason} ->
         Logger.error("Consumer handler failed for msg #{message.id}: #{inspect(reason)}")
+        handle_failure(state, message)
 
       other ->
         Logger.warning("Consumer handler returned unexpected value: #{inspect(other)}")
+        handle_failure(state, message)
+    end
+  end
+
+  defp handle_failure(state, message) do
+    case ConsumerGroup.nack(state.stream, state.group_name, message.id) do
+      :ok ->
+        Logger.info("Message #{message.id} NACKed for retry.")
+
+      {:ok, :dead_lettered} ->
+        Logger.warning(
+          "Message #{message.id} exhausted retries and was moved to the dead-letter stream."
+        )
+
+      {:error, :not_pending} ->
+        Logger.warning("Message #{message.id} was not pending; cannot NACK.")
+
+      {:error, reason} ->
+        Logger.error("Failed to NACK message #{message.id}: #{inspect(reason)}")
     end
   end
 end
