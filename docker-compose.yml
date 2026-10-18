@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  orca-mq:
+    build: .
+    image: orca-mq:latest
+    container_name: orcamq_server
+    ports:
+      - "5555:5555"
+    environment:
+      - PORT=5555
+    restart: unless-stopped

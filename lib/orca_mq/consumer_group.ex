@@ -301,9 +301,6 @@ defmodule OrcaMQ.ConsumerGroup do
     else
       {:error, :not_found} ->
         {:error, :message_not_found}
-
-      {:error, reason} ->
-        {:error, {:dead_letter_publish_failed, reason}}
     end
   end
 
