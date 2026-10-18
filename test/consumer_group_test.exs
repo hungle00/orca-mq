@@ -63,9 +63,15 @@ defmodule OrcaMQ.ConsumerGroupTest do
     group = "consumer-handler-failure"
 
     assert {:ok, _consumer} =
-             OrcaMQ.subscribe(stream, group, fn _message ->
-               {:error, :handler_failed}
-             end)
+             OrcaMQ.subscribe(
+               stream,
+               group,
+               fn _message ->
+                 {:error, :handler_failed}
+               end,
+               retry_backoff_ms: 10,
+               max_retry_backoff_ms: 20
+             )
 
     assert {:ok, message_id} = OrcaMQ.publish(stream, :fail_me)
 
@@ -174,7 +180,33 @@ defmodule OrcaMQ.ConsumerGroupTest do
            ] = MessageStore.list("#{stream}:dead_letter")
   end
 
-  test "messages assigned to a terminated consumer are redelivered" do
+  test "NACK retries use exponential backoff" do
+    stream = "consumer-group-nack-backoff"
+    group = "consumer-group-nack-backoff"
+
+    start_supervised!(
+      {ConsumerGroup,
+       stream: stream,
+       group_name: group,
+       max_retries: 2,
+       retry_backoff_ms: 80,
+       max_retry_backoff_ms: 200}
+    )
+
+    assert :ok = ConsumerGroup.register_consumer(stream, group, self(), 1)
+    assert {:ok, message_id} = StreamServer.publish(stream, :retry_me)
+    assert_receive {:deliver, %{id: ^message_id}}, 1_000
+
+    assert :ok = ConsumerGroup.nack(stream, group, message_id)
+    refute_receive {:deliver, %{id: ^message_id}}, 30
+    assert_receive {:deliver, %{id: ^message_id}}, 1_000
+
+    assert :ok = ConsumerGroup.nack(stream, group, message_id)
+    refute_receive {:deliver, %{id: ^message_id}}, 100
+    assert_receive {:deliver, %{id: ^message_id}}, 1_000
+  end
+
+  test "supervised consumers restart and receive their pending messages again" do
     stream = "push-consumer-redelivery"
     group = "push-consumer-redelivery"
     parent = self()
@@ -193,28 +225,41 @@ defmodule OrcaMQ.ConsumerGroupTest do
                prefetch: 1
              )
 
-    assert {:ok, _id} = OrcaMQ.publish(stream, :retry_me)
+    assert {:ok, message_id} = OrcaMQ.publish(stream, :retry_me)
     assert_receive {:first_consumer_started, :retry_me}, 1_000
-    Process.unlink(first_consumer)
     Process.exit(first_consumer, :kill)
-    assert wait_until(fn -> ConsumerGroup.info(stream, group).consumer_count == 0 end)
 
-    assert {:ok, _second_consumer} =
-             OrcaMQ.subscribe(
-               stream,
-               group,
-               fn message ->
-                 retry_count =
-                   ConsumerGroup.info(stream, group).pending_entries[message.id].retry_count
+    refute_receive {:first_consumer_started, :retry_me}, 30
+    assert_receive {:first_consumer_started, :retry_me}, 1_000
 
-                 send(parent, {:redelivered, message.payload, retry_count})
-                 :ok
-               end,
-               prefetch: 1
-             )
+    assert wait_until(fn ->
+             case ConsumerGroup.info(stream, group).pending_entries do
+               %{^message_id => %{consumer_pid: pid, retry_count: 1}} ->
+                 is_pid(pid) and pid != first_consumer
 
-    assert_receive {:redelivered, :retry_me, 1}, 1_000
+               _ ->
+                 false
+             end
+           end)
+
+    restarted_consumer =
+      ConsumerGroup.info(stream, group).pending_entries[message_id].consumer_pid
+
+    assert Process.alive?(restarted_consumer)
+    send(restarted_consumer, :hold)
     assert wait_until(fn -> ConsumerGroup.info(stream, group).pending_count == 0 end)
+  end
+
+  test "consumer group enforces its configured consumer limit" do
+    stream = "consumer-group-consumer-limit"
+    group = "consumer-group-consumer-limit"
+    handler = fn _message -> :ok end
+
+    assert {:ok, _first_consumer} =
+             OrcaMQ.subscribe(stream, group, handler, max_consumers: 1)
+
+    assert {:error, _reason} = OrcaMQ.subscribe(stream, group, handler)
+    assert ConsumerGroup.info(stream, group).consumer_count == 1
   end
 
   defp wait_until(fun, attempts \\ 50)

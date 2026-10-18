@@ -10,6 +10,7 @@ defmodule OrcaMQ.Application do
   @impl true
   def start(_type, _args) do
     tcp_port = String.to_integer(System.get_env("PORT") || "5555")
+    max_consumer_workers = Application.get_env(:orca_mq, :max_consumer_workers, 1_000)
 
     children = [
       # The Registry tracks ConsumerGroup processes by {stream, group_name}.
@@ -17,6 +18,8 @@ defmodule OrcaMQ.Application do
       {Registry, keys: :duplicate, name: OrcaMQ.StreamRegistry},
       # The DynamicSupervisor starts ConsumerGroup processes when subscribe/3 is called.
       {DynamicSupervisor, strategy: :one_for_one, name: OrcaMQ.GroupSupervisor},
+      {DynamicSupervisor,
+       strategy: :one_for_one, name: OrcaMQ.ConsumerSupervisor, max_children: max_consumer_workers},
       OrcaMQ.MessageStore,
       # StreamServer depends on MessageStore.
       OrcaMQ.StreamServer,

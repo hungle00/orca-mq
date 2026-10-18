@@ -18,6 +18,16 @@ defmodule OrcaMQ.Consumer do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :permanent,
+      shutdown: 5_000,
+      type: :worker
+    }
+  end
+
   @impl true
   def init(opts) do
     stream = Keyword.fetch!(opts, :stream)

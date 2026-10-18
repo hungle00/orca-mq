@@ -36,6 +36,12 @@ defmodule OrcaMQ do
   consumer and defaults to 10. The legacy `:batch_size` option is used as an alias
   when `:prefetch` is not set. Set `:manual_ack` to `true` to acknowledge messages
   explicitly with `ack/3`; it defaults to `false`.
+
+  The first subscription that starts a group may configure `:max_consumers`
+  (default 100), `:max_retries` (default 3), `:retry_backoff_ms` (default 100),
+  and `:max_retry_backoff_ms` (default 5_000). Consumer processes are supervised
+  and restarted after crashes. The total number of workers is capped by the
+  `:max_consumer_workers` application setting (default 1_000).
   """
   @spec subscribe(String.t(), String.t(), (term() -> :ok | {:error, term()}), keyword()) ::
           {:ok, pid()} | {:error, term()}
@@ -50,7 +56,7 @@ defmodule OrcaMQ do
         ]
         |> Keyword.merge(opts)
 
-      Consumer.start_link(consumer_opts)
+      DynamicSupervisor.start_child(OrcaMQ.ConsumerSupervisor, {Consumer, consumer_opts})
     end
   end
 
@@ -68,7 +74,16 @@ defmodule OrcaMQ do
     case GenServer.whereis(ConsumerGroup.via_tuple(stream, group_name)) do
       nil ->
         # If it is not running, start it under the dynamic supervisor.
-        group_opts = [stream: stream, group_name: group_name] ++ Keyword.take(opts, [:start_id])
+        group_opts =
+          [stream: stream, group_name: group_name] ++
+            Keyword.take(opts, [
+              :start_id,
+              :max_consumers,
+              :max_retries,
+              :retry_backoff_ms,
+              :max_retry_backoff_ms
+            ])
+
         DynamicSupervisor.start_child(OrcaMQ.GroupSupervisor, {ConsumerGroup, group_opts})
 
       pid ->

@@ -7,6 +7,9 @@ defmodule OrcaMQ.ConsumerGroup do
   require Logger
 
   @default_max_retries 3
+  @default_max_consumers 100
+  @default_retry_backoff_ms 100
+  @default_max_retry_backoff_ms 5_000
 
   alias OrcaMQ.MessageStore
   alias OrcaMQ.StreamServer
@@ -16,6 +19,10 @@ defmodule OrcaMQ.ConsumerGroup do
     :group_name,
     :last_delivered_id,
     :max_retries,
+    :max_consumers,
+    :retry_backoff_ms,
+    :max_retry_backoff_ms,
+    :retry_timer,
     pending: %{},
     consumers: %{}
   ]
@@ -29,7 +36,8 @@ defmodule OrcaMQ.ConsumerGroup do
             binary() => %{
               consumer_pid: pid() | nil,
               delivered_at: integer(),
-              retry_count: non_neg_integer()
+              retry_count: non_neg_integer(),
+              retry_at: integer() | nil
             }
           },
           consumers: %{pid() => %{prefetch: pos_integer(), monitor_ref: reference()}}
@@ -84,34 +92,54 @@ defmodule OrcaMQ.ConsumerGroup do
     stream = Keyword.fetch!(opts, :stream)
     group_name = Keyword.fetch!(opts, :group_name)
     max_retries = Keyword.get(opts, :max_retries, @default_max_retries)
-    {:ok, _registry_pid} = Registry.register(OrcaMQ.StreamRegistry, stream, nil)
+    max_consumers = Keyword.get(opts, :max_consumers, @default_max_consumers)
+    retry_backoff_ms = Keyword.get(opts, :retry_backoff_ms, @default_retry_backoff_ms)
+    max_retry_backoff_ms = Keyword.get(opts, :max_retry_backoff_ms, @default_max_retry_backoff_ms)
 
-    state = %__MODULE__{
-      stream: stream,
-      group_name: group_name,
-      last_delivered_id: Keyword.get(opts, :start_id, "0-0"),
-      max_retries: max_retries
-    }
+    if is_integer(max_retries) and max_retries >= 0 and is_integer(max_consumers) and
+         max_consumers > 0 and is_integer(retry_backoff_ms) and retry_backoff_ms > 0 and
+         is_integer(max_retry_backoff_ms) and max_retry_backoff_ms >= retry_backoff_ms do
+      {:ok, _registry_pid} = Registry.register(OrcaMQ.StreamRegistry, stream, nil)
 
-    {:ok, state}
+      state = %__MODULE__{
+        stream: stream,
+        group_name: group_name,
+        last_delivered_id: Keyword.get(opts, :start_id, "0-0"),
+        max_retries: max_retries,
+        max_consumers: max_consumers,
+        retry_backoff_ms: retry_backoff_ms,
+        max_retry_backoff_ms: max_retry_backoff_ms
+      }
+
+      {:ok, state}
+    else
+      {:stop, {:invalid_consumer_group_options, opts}}
+    end
   end
 
   @impl true
   def handle_call({:register_consumer, consumer_pid, prefetch}, _from, state) do
-    consumers =
-      case Map.get(state.consumers, consumer_pid) do
-        nil ->
-          Map.put(state.consumers, consumer_pid, %{
-            prefetch: prefetch,
-            monitor_ref: Process.monitor(consumer_pid)
-          })
+    state = prune_dead_consumers(state)
 
-        consumer ->
-          Map.put(state.consumers, consumer_pid, %{consumer | prefetch: prefetch})
-      end
+    if not Map.has_key?(state.consumers, consumer_pid) and
+         map_size(state.consumers) >= state.max_consumers do
+      {:reply, {:error, :max_consumers_reached}, state}
+    else
+      consumers =
+        case Map.get(state.consumers, consumer_pid) do
+          nil ->
+            Map.put(state.consumers, consumer_pid, %{
+              prefetch: prefetch,
+              monitor_ref: Process.monitor(consumer_pid)
+            })
 
-    state = %{state | consumers: consumers} |> dispatch_available()
-    {:reply, :ok, state}
+          consumer ->
+            Map.put(state.consumers, consumer_pid, %{consumer | prefetch: prefetch})
+        end
+
+      state = %{state | consumers: consumers} |> dispatch_available()
+      {:reply, :ok, state}
+    end
   end
 
   def handle_call({:fetch_messages, consumer_pid, count}, _from, state) do
@@ -147,7 +175,8 @@ defmodule OrcaMQ.ConsumerGroup do
       last_delivered_id: state.last_delivered_id,
       pending_count: map_size(state.pending),
       pending_entries: state.pending,
-      consumer_count: map_size(state.consumers)
+      consumer_count: map_size(state.consumers),
+      max_consumers: state.max_consumers
     }
 
     {:reply, info_map, state}
@@ -159,13 +188,28 @@ defmodule OrcaMQ.ConsumerGroup do
     {:noreply, dispatch_available(state)}
   end
 
+  def handle_info({:retry_pending, token}, %{retry_timer: %{token: token}} = state) do
+    {:noreply, dispatch_available(%{state | retry_timer: nil})}
+  end
+
+  def handle_info({:retry_pending, _token}, state), do: {:noreply, state}
+
   def handle_info({:DOWN, monitor_ref, :process, consumer_pid, _reason}, state) do
     case Map.get(state.consumers, consumer_pid) do
       %{monitor_ref: ^monitor_ref} ->
         pending =
           Map.new(state.pending, fn
             {message_id, %{consumer_pid: ^consumer_pid} = metadata} ->
-              {message_id, %{metadata | consumer_pid: nil}}
+              {message_id,
+               %{
+                 metadata
+                 | consumer_pid: nil,
+                   retry_at:
+                     if(metadata.retry_count >= state.max_retries,
+                       do: now_ms(),
+                       else: retry_at(state, metadata.retry_count)
+                     )
+               }}
 
             entry ->
               entry
@@ -187,10 +231,41 @@ defmodule OrcaMQ.ConsumerGroup do
     end
   end
 
-  defp dispatch_available(state) do
-    Enum.reduce(Map.keys(state.consumers), state, fn consumer_pid, acc ->
-      dispatch_to_consumer(acc, consumer_pid)
+  defp prune_dead_consumers(state) do
+    state.consumers
+    |> Enum.reject(fn {consumer_pid, _consumer} -> Process.alive?(consumer_pid) end)
+    |> Enum.reduce(state, fn {consumer_pid, consumer}, acc ->
+      Process.demonitor(consumer.monitor_ref, [:flush])
+
+      pending =
+        Map.new(acc.pending, fn
+          {message_id, %{consumer_pid: ^consumer_pid} = metadata} ->
+            {message_id,
+             %{
+               metadata
+               | consumer_pid: nil,
+                 retry_at:
+                   if(metadata.retry_count >= acc.max_retries,
+                     do: now_ms(),
+                     else: retry_at(acc, metadata.retry_count)
+                   )
+             }}
+
+          entry ->
+            entry
+        end)
+
+      %{acc | consumers: Map.delete(acc.consumers, consumer_pid), pending: pending}
     end)
+  end
+
+  defp dispatch_available(state) do
+    state =
+      Enum.reduce(Map.keys(state.consumers), state, fn consumer_pid, acc ->
+        dispatch_to_consumer(acc, consumer_pid)
+      end)
+
+    schedule_retry(state)
   end
 
   defp dispatch_to_consumer(state, consumer_pid) do
@@ -216,7 +291,9 @@ defmodule OrcaMQ.ConsumerGroup do
 
   defp redeliver_pending(state, consumer_pid, available) do
     state.pending
-    |> Enum.filter(fn {_id, %{consumer_pid: owner}} -> is_nil(owner) end)
+    |> Enum.filter(fn {_id, %{consumer_pid: owner} = metadata} ->
+      is_nil(owner) and (is_nil(metadata.retry_at) or metadata.retry_at <= now_ms())
+    end)
     |> Enum.sort_by(fn {id, _entry} -> stream_id_key(id) end)
     |> Enum.take(available)
     |> Enum.reduce({state, available}, fn {message_id, metadata}, {acc, slots} ->
@@ -227,7 +304,14 @@ defmodule OrcaMQ.ConsumerGroup do
 
           {:error, reason} ->
             Logger.error("Could not dead-letter message #{message_id}: #{inspect(reason)}")
-            {acc, slots}
+
+            pending =
+              Map.put(acc.pending, message_id, %{
+                metadata
+                | retry_at: retry_at(acc, metadata.retry_count)
+              })
+
+            {%{acc | pending: pending}, slots}
         end
       else
         case MessageStore.get(acc.stream, message_id) do
@@ -238,14 +322,22 @@ defmodule OrcaMQ.ConsumerGroup do
               Map.put(acc.pending, message_id, %{
                 consumer_pid: consumer_pid,
                 delivered_at: System.system_time(:millisecond),
-                retry_count: metadata.retry_count + 1
+                retry_count: metadata.retry_count + 1,
+                retry_at: nil
               })
 
             {%{acc | pending: pending}, slots - 1}
 
           {:error, reason} ->
             Logger.error("Could not redeliver pending message #{message_id}: #{inspect(reason)}")
-            {acc, slots}
+
+            pending =
+              Map.put(acc.pending, message_id, %{
+                metadata
+                | retry_at: retry_at(acc, metadata.retry_count)
+              })
+
+            {%{acc | pending: pending}, slots}
         end
       end
     end)
@@ -267,6 +359,14 @@ defmodule OrcaMQ.ConsumerGroup do
           {:reply, {:ok, :dead_lettered}, state}
 
         {:error, reason} ->
+          pending =
+            Map.put(state.pending, message_id, %{
+              metadata
+              | consumer_pid: nil,
+                retry_at: retry_at(state, metadata.retry_count)
+            })
+
+          state = %{state | pending: pending} |> dispatch_available()
           {:reply, {:error, reason}, state}
       end
     else
@@ -275,7 +375,13 @@ defmodule OrcaMQ.ConsumerGroup do
           "Retry count: #{metadata.retry_count}/#{state.max_retries}"
       )
 
-      pending = Map.put(state.pending, message_id, %{metadata | consumer_pid: nil})
+      pending =
+        Map.put(state.pending, message_id, %{
+          metadata
+          | consumer_pid: nil,
+            retry_at: retry_at(state, metadata.retry_count)
+        })
+
       state = %{state | pending: pending} |> dispatch_available()
       {:reply, :ok, state}
     end
@@ -316,7 +422,8 @@ defmodule OrcaMQ.ConsumerGroup do
         metadata = %{
           consumer_pid: consumer_pid,
           delivered_at: now,
-          retry_count: 0
+          retry_count: 0,
+          retry_at: nil
         }
 
         {Map.put(pending, message.id, metadata), message.id}
@@ -324,6 +431,61 @@ defmodule OrcaMQ.ConsumerGroup do
 
     {messages, %{state | pending: pending, last_delivered_id: last_delivered_id}}
   end
+
+  defp schedule_retry(state) do
+    state = cancel_retry_timer(state)
+    now = now_ms()
+
+    next_retry_at =
+      state.pending
+      |> Enum.map(fn {_id, metadata} -> metadata end)
+      |> Enum.filter(fn metadata ->
+        is_nil(metadata.consumer_pid) and is_integer(metadata.retry_at)
+      end)
+      |> Enum.map(& &1.retry_at)
+      |> Enum.min(fn -> nil end)
+
+    case {next_retry_at, has_retry_capacity?(state)} do
+      {nil, _} ->
+        state
+
+      {_retry_at, false} ->
+        state
+
+      {retry_at, true} ->
+        token = make_ref()
+        timer_ref = Process.send_after(self(), {:retry_pending, token}, max(retry_at - now, 0))
+        %{state | retry_timer: %{ref: timer_ref, token: token}}
+    end
+  end
+
+  defp has_retry_capacity?(state) do
+    Enum.any?(state.consumers, fn {consumer_pid, consumer} ->
+      in_flight =
+        Enum.count(state.pending, fn {_id, %{consumer_pid: owner}} ->
+          owner == consumer_pid
+        end)
+
+      consumer.prefetch > in_flight
+    end)
+  end
+
+  defp cancel_retry_timer(%{retry_timer: nil} = state), do: state
+
+  defp cancel_retry_timer(%{retry_timer: %{ref: timer_ref}} = state) do
+    Process.cancel_timer(timer_ref)
+    %{state | retry_timer: nil}
+  end
+
+  defp retry_at(state, retry_count) do
+    now_ms() + retry_delay(state.retry_backoff_ms, retry_count, state.max_retry_backoff_ms)
+  end
+
+  defp retry_delay(delay, 0, max_delay), do: min(delay, max_delay)
+  defp retry_delay(delay, _attempt, max_delay) when delay >= div(max_delay + 1, 2), do: max_delay
+  defp retry_delay(delay, attempt, max_delay), do: retry_delay(delay * 2, attempt - 1, max_delay)
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp stream_id_key(id) when is_integer(id), do: {0, id, 0}
 
