@@ -51,6 +51,22 @@ iex --name broker@127.0.0.1 -S mix
 From the project root, start each process in a separate terminal, using the same Erlang cookie:
 ```
 iex --name broker@127.0.0.1 --cookie shared_cookie -S mix
-elixir --name subscriber@127.0.0.1 --cookie shared_cookie client/subscriber.exs
-elixir --name producer@127.0.0.1 --cookie shared_cookie client/producer.exs
+elixir --name subscriber@127.0.0.1 --cookie shared_cookie scripts/subscriber.exs
+elixir --name producer@127.0.0.1 --cookie shared_cookie scripts/producer.exs
 ```
+
+## Consumer workers and retries
+
+The first `subscribe/4` call for a group can set `max_consumers` (default `100`),
+`max_retries` (default `3`), `retry_backoff_ms` (default `100`), and
+`max_retry_backoff_ms` (default `5_000`). Retry delays double after each failed
+delivery, up to the configured maximum. These settings are fixed for that group
+until it is restarted.
+
+The broker-wide worker limit defaults to `1_000` and can be changed in application
+configuration:
+
+```elixir
+config :orca_mq, max_consumer_workers: 500
+```
+

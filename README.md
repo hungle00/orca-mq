@@ -22,6 +22,7 @@ It explores an alternative approach to message delivery using ETS and the concur
 
 - **High Performance In-Memory Storage:** Powered by ETS (`:public`, `:ordered_set`, `:bag`) enabling concurrent read/write throughput without GenServer lock contention.
 - **Push-based Consumers:** Internal subscribers are notified when messages arrive; configurable prefetch limits unacknowledged deliveries per consumer.
+- **Retry Backoff:** NACKed or reclaimed messages use exponential retry delays capped by a configurable maximum.
 - **Consumer Groups & PEL:** Tracks reading offsets per consumer group along with a Pending Entries List (PEL) to guarantee at-least-once message delivery.
 - **TCP Server** — Expose a TCP interface for publishing and subscribing from applications written in different programming languages.
 - **Docker Support** — Run OrcaMQ as a standalone service in a container.
@@ -76,12 +77,9 @@ The server should report a startup message similar to:
 OrcaMQ server running on 0.0.0.0:5555
 ```
 
-## Technology Stack
+## Client Documentation
 
-- **Language:** Elixir
-- **Runtime:** Erlang/OTP and BEAM
-- **Storage:** ETS
-- **Deployment:** Docker and Docker Compose
+- [Python Client Guide](clients/python/usage.md) — Run OrcaMQ with Docker and publish or consume messages using the Python client.
 
 ## Project Status
 
