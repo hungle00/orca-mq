@@ -23,9 +23,8 @@ It explores an alternative approach to message delivery using ETS and the concur
 - **High Performance In-Memory Storage:** Powered by ETS (`:public`, `:ordered_set`, `:bag`) enabling concurrent read/write throughput without GenServer lock contention.
 - **Push-based Consumers:** Internal subscribers are notified when messages arrive; configurable prefetch limits unacknowledged deliveries per consumer.
 - **Consumer Groups & PEL:** Tracks reading offsets per consumer group along with a Pending Entries List (PEL) to guarantee at-least-once message delivery.
-- **Distributed Erlang Native:** Seamless clustering across multiple nodes via native Erlang RPC and message passing without external network layers.
-- **Docker Support** — Run the broker as a standalone service in a container.
-
+- **TCP Server** — Expose a TCP interface for publishing and subscribing from applications written in different programming languages.
+- **Docker Support** — Run OrcaMQ as a standalone service in a container.
 
 ## Architecture
 

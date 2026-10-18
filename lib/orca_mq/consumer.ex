@@ -11,7 +11,7 @@ defmodule OrcaMQ.Consumer do
 
   @default_prefetch 10
 
-  defstruct [:stream, :group_name, :handler_fn]
+  defstruct [:stream, :group_name, :handler_fn, manual_ack: false]
 
   @doc "Starts a consumer process."
   def start_link(opts) do
@@ -24,11 +24,17 @@ defmodule OrcaMQ.Consumer do
     group_name = Keyword.fetch!(opts, :group_name)
     handler_fn = Keyword.fetch!(opts, :handler_fn)
     prefetch = Keyword.get(opts, :prefetch, Keyword.get(opts, :batch_size, @default_prefetch))
+    manual_ack = Keyword.get(opts, :manual_ack, false)
 
     if not (is_integer(prefetch) and prefetch > 0) do
       {:stop, {:invalid_prefetch, prefetch}}
     else
-      state = %__MODULE__{stream: stream, group_name: group_name, handler_fn: handler_fn}
+      state = %__MODULE__{
+        stream: stream,
+        group_name: group_name,
+        handler_fn: handler_fn,
+        manual_ack: manual_ack
+      }
 
       case ConsumerGroup.register_consumer(stream, group_name, self(), prefetch) do
         :ok -> {:ok, state}
@@ -46,10 +52,10 @@ defmodule OrcaMQ.Consumer do
   defp process_message(message, state) do
     case state.handler_fn.(message) do
       :ok ->
-        ConsumerGroup.ack(state.stream, state.group_name, message.id)
+        acknowledge(state, message)
 
       {:ok, _result} ->
-        ConsumerGroup.ack(state.stream, state.group_name, message.id)
+        acknowledge(state, message)
 
       {:error, reason} ->
         Logger.error("Consumer handler failed for msg #{message.id}: #{inspect(reason)}")
@@ -59,6 +65,12 @@ defmodule OrcaMQ.Consumer do
         Logger.warning("Consumer handler returned unexpected value: #{inspect(other)}")
         handle_failure(state, message)
     end
+  end
+
+  defp acknowledge(%{manual_ack: true}, _message), do: :ok
+
+  defp acknowledge(state, message) do
+    ConsumerGroup.ack(state.stream, state.group_name, message.id)
   end
 
   defp handle_failure(state, message) do

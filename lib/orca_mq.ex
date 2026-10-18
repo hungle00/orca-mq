@@ -34,7 +34,8 @@ defmodule OrcaMQ do
   Starts the consumer group if it does not exist, then starts a push-based consumer.
   The `:prefetch` option limits messages delivered without acknowledgement per
   consumer and defaults to 10. The legacy `:batch_size` option is used as an alias
-  when `:prefetch` is not set.
+  when `:prefetch` is not set. Set `:manual_ack` to `true` to acknowledge messages
+  explicitly with `ack/3`; it defaults to `false`.
   """
   @spec subscribe(String.t(), String.t(), (term() -> :ok | {:error, term()}), keyword()) ::
           {:ok, pid()} | {:error, term()}

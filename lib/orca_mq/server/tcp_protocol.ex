@@ -96,11 +96,31 @@ defmodule OrcaMQ.Server.TCPProtocol do
               send(self_pid, {:deliver_msg, msg})
               :ok
             end,
-            prefetch: 20
+            prefetch: 20,
+            manual_ack: true
           )
 
         transport.send(socket, "OK SUBSCRIBED_TO_#{stream}_GROUP_#{group}\r\n")
         %{state | subscribed: true}
+
+      # Acknowledge a message: ACK <stream> <group> <message_id>
+      ["ACK", stream, group_and_message_id] ->
+        case String.split(group_and_message_id, " ", parts: 2) do
+          [group, message_id] ->
+            case OrcaMQ.ack(stream, group, message_id) do
+              :ok ->
+                transport.send(socket, "OK ACKED #{message_id}\r\n")
+
+              {:error, reason} ->
+                transport.send(socket, "ERROR #{inspect(reason)}\r\n")
+            end
+
+            state
+
+          _ ->
+            transport.send(socket, "ERROR INVALID_COMMAND\r\n")
+            state
+        end
 
       # Ping command for testing the connection.
       ["PING"] ->
